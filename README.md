@@ -1,4 +1,4 @@
-# YOLO + QML Survivor Priority Project
+# Survivor Priority
 
 ## What the project does
 

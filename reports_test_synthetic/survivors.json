@@ -1,0 +1,22 @@
+[
+  {
+    "survivor_id": 1,
+    "priority": 2,
+    "priority_name": "High",
+    "qml_priority": "High",
+    "latitude": 12.34,
+    "longitude": 56.78,
+    "gps_available": true,
+    "map_url": "https://www.openstreetmap.org/?mlat=12.34&mlon=56.78#map=18/12.34/56.78",
+    "image_path": "reports_test_synthetic\\images\\survivor_1_frame_5.jpg",
+    "frame": 5,
+    "captured_at": "1970-01-01T05:30:00",
+    "movement": "moving",
+    "nearby_hazard": "fire",
+    "distance_from_camera": 0.2,
+    "body_visibility_pct": 0.8,
+    "time_since_last_movement": 0.1,
+    "box_width": 50,
+    "box_height": 60
+  }
+]

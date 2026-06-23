@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Survivor GPS Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; }
+    header { padding: 14px 18px; background: #172026; color: white; }
+    #map { height: calc(100vh - 82px); min-height: 420px; }
+    .note { margin-top: 4px; color: #dce5ea; }
+    .popup img { width: 150px; max-height: 120px; object-fit: cover; display: block; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Survivor GPS Map</strong>
+    <div class="note">GPS markers are shown below.</div>
+  </header>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const points = [{"id": 1, "priority": "High", "lat": 12.34, "lon": 56.78, "image": "images/survivor_1_frame_54.jpg", "hazard": "clear", "movement": "moving"}, {"id": 2, "priority": "High", "lat": 12.34, "lon": 56.78, "image": "images/survivor_2_frame_56.jpg", "hazard": "clear", "movement": "moving"}, {"id": 3, "priority": "High", "lat": 12.34, "lon": 56.78, "image": "images/survivor_3_frame_56.jpg", "hazard": "clear", "movement": "moving"}, {"id": 4, "priority": "High", "lat": 12.34, "lon": 56.78, "image": "images/survivor_4_frame_81.jpg", "hazard": "clear", "movement": "moving"}];
+    const map = L.map('map').setView([12.34, 56.78], points.length ? 17 : 2);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const colors = { High: '#b00020', Medium: '#b87500', Low: '#167c3a' };
+    const bounds = [];
+    for (const point of points) {
+      const marker = L.circleMarker([point.lat, point.lon], {
+        radius: 9,
+        color: colors[point.priority] || '#255f85',
+        fillColor: colors[point.priority] || '#255f85',
+        fillOpacity: 0.85
+      }).addTo(map);
+      marker.bindPopup(
+        `<div class="popup"><strong>Survivor ${point.id}</strong><br>` +
+        `Priority: ${point.priority}<br>` +
+        `GPS: ${point.lat}, ${point.lon}<br>` +
+        `Movement: ${point.movement}<br>` +
+        `Hazard: ${point.hazard}<br>` +
+        `<img src="${point.image}" alt="Survivor ${point.id}"></div>`
+      );
+      bounds.push([point.lat, point.lon]);
+    }
+    if (bounds.length > 1) {
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+  </script>
+</body>
+</html>

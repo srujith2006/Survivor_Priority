@@ -1,0 +1,2 @@
+survivor_id,priority_name,qml_priority,latitude,longitude,gps_available,map_url,image_path,frame,captured_at,movement,nearby_hazard,distance_from_camera,body_visibility_pct,time_since_last_movement
+1,High,High,12.34,56.78,True,https://www.openstreetmap.org/?mlat=12.34&mlon=56.78#map=18/12.34/56.78,reports_test_synthetic\images\survivor_1_frame_5.jpg,5,1970-01-01T05:30:00,moving,fire,0.2,0.8,0.1

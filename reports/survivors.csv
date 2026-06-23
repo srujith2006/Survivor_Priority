@@ -1,0 +1,5 @@
+survivor_id,priority_name,qml_priority,latitude,longitude,gps_available,map_url,image_path,frame,captured_at,movement,nearby_hazard,distance_from_camera,body_visibility_pct,time_since_last_movement
+1,High,High,12.34,56.78,True,https://www.openstreetmap.org/?mlat=12.34&mlon=56.78#map=18/12.34/56.78,reports\images\survivor_1_frame_54.jpg,54,2026-06-21T21:43:09,moving,clear,0.029,1.0,0.0
+2,High,High,12.34,56.78,True,https://www.openstreetmap.org/?mlat=12.34&mlon=56.78#map=18/12.34/56.78,reports\images\survivor_2_frame_56.jpg,56,2026-06-21T21:43:11,moving,clear,0.05,0.504,0.0
+3,High,High,12.34,56.78,True,https://www.openstreetmap.org/?mlat=12.34&mlon=56.78#map=18/12.34/56.78,reports\images\survivor_3_frame_56.jpg,56,2026-06-21T21:43:11,moving,clear,0.025,0.504,0.0
+4,High,High,12.34,56.78,True,https://www.openstreetmap.org/?mlat=12.34&mlon=56.78#map=18/12.34/56.78,reports\images\survivor_4_frame_81.jpg,81,2026-06-21T21:43:29,moving,clear,0.425,0.367,0.0

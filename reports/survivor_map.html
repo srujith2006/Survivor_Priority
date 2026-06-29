@@ -20,8 +20,8 @@
   <div id="map"></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const points = [{"id": 1, "priority": "High", "lat": 12.34, "lon": 56.78, "image": "images/survivor_1_frame_54.jpg", "hazard": "clear", "movement": "moving"}, {"id": 2, "priority": "High", "lat": 12.34, "lon": 56.78, "image": "images/survivor_2_frame_56.jpg", "hazard": "clear", "movement": "moving"}, {"id": 3, "priority": "High", "lat": 12.34, "lon": 56.78, "image": "images/survivor_3_frame_56.jpg", "hazard": "clear", "movement": "moving"}, {"id": 4, "priority": "High", "lat": 12.34, "lon": 56.78, "image": "images/survivor_4_frame_81.jpg", "hazard": "clear", "movement": "moving"}];
-    const map = L.map('map').setView([12.34, 56.78], points.length ? 17 : 2);
+    const points = [{"id": 1, "priority": "Low", "lat": 17.34, "lon": 82.78, "image": "images/survivor_1_frame_42.jpg", "hazard": "clear", "movement": "moving"}, {"id": 2, "priority": "Low", "lat": 17.34, "lon": 82.78, "image": "images/survivor_2_frame_44.jpg", "hazard": "clear", "movement": "moving"}];
+    const map = L.map('map').setView([17.34, 82.78], points.length ? 17 : 2);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap contributors'

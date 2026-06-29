@@ -1,4 +1,5 @@
 import json
+import math
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -14,7 +15,11 @@ latest_gps = {
     "longitude": None,
     "direction": "0",
     "updated_at": None,
+    "change_status": "waiting",
+    "distance_from_previous_m": None,
 }
+
+GPS_CHANGE_THRESHOLD_METERS = 2.0
 
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
@@ -75,16 +80,52 @@ def parse_gps_payload(payload, query_values=None, content_type=""):
     return parse_gps_values(parts[0], parts[1], parts[2])
 
 
+def gps_distance_m(lat1, lon1, lat2, lon2):
+    radius_m = 6371000
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+    )
+    return radius_m * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def classify_gps_change(gps_data):
+    previous_lat = latest_gps["latitude"]
+    previous_lon = latest_gps["longitude"]
+
+    if previous_lat is None or previous_lon is None:
+        return "initial", None
+
+    distance = gps_distance_m(
+        previous_lat,
+        previous_lon,
+        gps_data["latitude"],
+        gps_data["longitude"],
+    )
+    status = "different" if distance >= GPS_CHANGE_THRESHOLD_METERS else "same"
+    return status, round(distance, 3)
+
+
 def print_gps(gps_data):
     print("Latest GPS coordinates", flush=True)
     print(f"Latitude  : {gps_data['latitude']}", flush=True)
     print(f"Longitude : {gps_data['longitude']}", flush=True)
     print(f"Direction : {gps_data['direction']}", flush=True)
+    print(f"Change    : {gps_data['change_status']}", flush=True)
+    print(f"Distance  : {gps_data['distance_from_previous_m']} m", flush=True)
     print(f"Updated   : {gps_data['updated_at']}", flush=True)
     print("-" * 40, flush=True)
 
 
 def save_gps(gps_data):
+    change_status, distance_m = classify_gps_change(gps_data)
+    gps_data["change_status"] = change_status
+    gps_data["distance_from_previous_m"] = distance_m
     gps_data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     latest_gps.update(gps_data)
     print_gps(latest_gps)
@@ -95,7 +136,7 @@ def print_waiting_message(port):
     print(f"Open latest GPS JSON at http://127.0.0.1:{port}/latest", flush=True)
     print("Waiting for GPS data...", flush=True)
     print("Send as POST body: latitude,longitude,direction", flush=True)
-    print(f"Or use GET: http://127.0.0.1:{port}/gps?lat=12.34&lon=56.78&dir=90", flush=True)
+    print(f"Or use GET: http://127.0.0.1:{port}/gps?lat=17.34&lon=82.78&dir=62.13", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
     print("-" * 40, flush=True)
 

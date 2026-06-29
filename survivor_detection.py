@@ -2,7 +2,9 @@ import argparse
 import csv
 import html
 import json
+import math
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +14,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import requests
+import torch
 from ultralytics import YOLO
 
 
@@ -31,6 +34,11 @@ GPS_INTERVAL_SECONDS = 1
 MOTION_PIXELS_THRESHOLD = 0.018
 TRACK_DISTANCE_THRESHOLD = 90
 STILL_TIME_CAP_SECONDS = 30
+GPS_CHANGE_THRESHOLD_METERS = 2.0
+STREAM_STALL_TIMEOUT_SECONDS = 5
+STREAM_OPEN_TIMEOUT_MILLISECONDS = 3000
+DEFAULT_INFERENCE_SIZE = 320
+DEFAULT_HAZARD_INTERVAL = 5
 
 PERSON_CLASS_ID = 0
 
@@ -129,6 +137,7 @@ class SurvivorReportWriter:
         hazard_name,
         latitude,
         longitude,
+        prediction_accuracy_pct,
         frame_count,
         now,
     ):
@@ -136,12 +145,14 @@ class SurvivorReportWriter:
         existing_priority = existing["priority"] if existing else -1
 
         if existing and priority < existing_priority:
+            self._update_gps_if_changed(existing, latitude, longitude)
             return
 
         if existing and priority == existing_priority:
             old_area = existing["box_width"] * existing["box_height"]
             new_area = max(box[2] - box[0], 1) * max(box[3] - box[1], 1)
             if new_area <= old_area:
+                self._update_gps_if_changed(existing, latitude, longitude)
                 return
 
         crop_path = self._save_survivor_image(frame, box, track_id, frame_count)
@@ -153,6 +164,7 @@ class SurvivorReportWriter:
             "priority": priority,
             "priority_name": priority_name,
             "qml_priority": priority_name,
+            "prediction_accuracy_pct": prediction_accuracy_pct,
             "latitude": latitude,
             "longitude": longitude,
             "gps_available": latitude is not None and longitude is not None,
@@ -170,6 +182,16 @@ class SurvivorReportWriter:
             "box_width": max(box[2] - box[0], 1),
             "box_height": max(box[3] - box[1], 1),
         }
+
+    def _update_gps_if_changed(self, event, latitude, longitude):
+        if latitude is None or longitude is None:
+            return
+
+        if gps_has_changed(event["latitude"], event["longitude"], latitude, longitude):
+            event["latitude"] = latitude
+            event["longitude"] = longitude
+            event["gps_available"] = True
+            event["map_url"] = map_link(latitude, longitude)
 
     def _save_survivor_image(self, frame, box, track_id, frame_count):
         x1, y1, x2, y2 = box
@@ -213,6 +235,7 @@ class SurvivorReportWriter:
             "survivor_id",
             "priority_name",
             "qml_priority",
+            "prediction_accuracy_pct",
             "latitude",
             "longitude",
             "gps_available",
@@ -241,7 +264,7 @@ class SurvivorReportWriter:
         rows = "\n".join(report_row(event, self.report_dir) for event in events)
         if not rows:
             rows = (
-                "<tr><td colspan=\"9\">No survivors were recorded in this run.</td></tr>"
+                "<tr><td colspan=\"10\">No survivors were recorded in this run.</td></tr>"
             )
 
         report_html = f"""<!doctype html>
@@ -272,6 +295,7 @@ class SurvivorReportWriter:
         <th>ID</th>
         <th>Captured Survivor</th>
         <th>QML Priority</th>
+        <th>Prediction Accuracy</th>
         <th>GPS</th>
         <th>Map</th>
         <th>Movement</th>
@@ -398,6 +422,27 @@ def map_link(latitude, longitude):
     return f"https://www.openstreetmap.org/?mlat={latitude}&mlon={longitude}#map=18/{latitude}/{longitude}"
 
 
+def gps_distance_m(lat1, lon1, lat2, lon2):
+    radius_m = 6371000
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+    )
+    return radius_m * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def gps_has_changed(old_lat, old_lon, new_lat, new_lon):
+    if old_lat is None or old_lon is None:
+        return True
+
+    return gps_distance_m(old_lat, old_lon, new_lat, new_lon) >= GPS_CHANGE_THRESHOLD_METERS
+
+
 def relative_path(path, base_dir):
     return Path(path).resolve().relative_to(Path(base_dir).resolve()).as_posix()
 
@@ -405,6 +450,8 @@ def relative_path(path, base_dir):
 def report_row(event, report_dir):
     image_path = html.escape(relative_path(event["image_path"], report_dir))
     priority_name = html.escape(event["priority_name"])
+    accuracy = event.get("prediction_accuracy_pct")
+    accuracy_text = f"{accuracy:.2f}%" if accuracy is not None else "unavailable"
     gps_text = (
         f"{event['latitude']}, {event['longitude']}"
         if event["gps_available"]
@@ -420,6 +467,7 @@ def report_row(event, report_dir):
   <td>{event["survivor_id"]}</td>
   <td><img src="{image_path}" alt="Survivor {event["survivor_id"]}"></td>
   <td class="{priority_name}">{priority_name}</td>
+  <td>{html.escape(accuracy_text)}</td>
   <td>{html.escape(gps_text)}</td>
   <td>{map_cell}</td>
   <td>{html.escape(event["movement"])}</td>
@@ -432,25 +480,100 @@ def report_row(event, report_dir):
 def get_gps(gps_url, last_lat, last_lon):
     try:
         gps = requests.get(gps_url, timeout=1).json()
-        return gps["latitude"], gps["longitude"]
+        latitude = gps.get("latitude")
+        longitude = gps.get("longitude")
+        if latitude is None or longitude is None:
+            return last_lat, last_lon
+
+        return latitude, longitude
     except Exception:
         return last_lat, last_lon
 
 
-def open_stream(source, mobile_ip):
+class LatestFrameCapture:
+    def __init__(self, cap, stall_timeout=STREAM_STALL_TIMEOUT_SECONDS):
+        self.cap = cap
+        self.stall_timeout = stall_timeout
+        self.condition = threading.Condition()
+        self.latest_frame = None
+        self.frame_id = 0
+        self.last_read_id = 0
+        self.running = True
+        self.opened = True
+        self.thread = threading.Thread(target=self._read_loop, daemon=True)
+        self.thread.start()
+
+    def _read_loop(self):
+        while self.running:
+            ret, frame = self.cap.read()
+            with self.condition:
+                if not ret:
+                    self.opened = False
+                    self.condition.notify_all()
+                    break
+
+                self.latest_frame = frame
+                self.frame_id += 1
+                self.condition.notify_all()
+
+    def read(self):
+        deadline = time.time() + self.stall_timeout
+        with self.condition:
+            while self.running and self.opened and self.frame_id == self.last_read_id:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    print(
+                        f"No new video frame for {self.stall_timeout:.0f}s. "
+                        "Stopping so outputs can be saved."
+                    )
+                    return False, None
+                self.condition.wait(min(remaining, 0.2))
+
+            if self.latest_frame is None:
+                return False, None
+
+            self.last_read_id = self.frame_id
+            return True, self.latest_frame.copy()
+
+    def release(self):
+        self.running = False
+        self.cap.release()
+        with self.condition:
+            self.condition.notify_all()
+
+        self.thread.join(timeout=1)
+
+
+def open_stream(source, mobile_ip, stall_timeout=STREAM_STALL_TIMEOUT_SECONDS):
     if source == "mobile":
         for url in mobile_video_urls(mobile_ip):
-            cap = cv2.VideoCapture(url)
+            print("Trying mobile stream:", url)
+            cap = cv2.VideoCapture()
+            cap.set(
+                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC,
+                STREAM_OPEN_TIMEOUT_MILLISECONDS,
+            )
+            cap.set(
+                cv2.CAP_PROP_READ_TIMEOUT_MSEC,
+                int(stall_timeout * 1000),
+            )
+            cap.open(url)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             if cap.isOpened():
                 ret, _ = cap.read()
                 if ret:
                     print("Connected:", url)
-                    return cap
+                    print("Low-latency mobile stream enabled.")
+                    return LatestFrameCapture(cap, stall_timeout)
 
             cap.release()
 
-        print("Unable to connect to mobile video stream.")
+        print(
+            "Unable to connect to the mobile video stream. Confirm that the "
+            "phone camera server is running, both devices can reach each other, "
+            f"and --mobile-ip is correct (current value: {mobile_ip})."
+        )
         sys.exit(1)
 
     camera_index = int(source) if source.isdigit() else source
@@ -670,7 +793,35 @@ def extract_priority_features(
 def predict_priority(qsvm, scaler, features):
     feature_frame = pd.DataFrame([features], columns=FEATURE_COLUMNS)
     scaled_features = scaler.transform(feature_frame)
-    return int(qsvm.predict(scaled_features)[0])
+    priority = int(qsvm.predict(scaled_features)[0])
+    accuracy_pct = prediction_accuracy_pct(qsvm, scaled_features, priority)
+    return priority, accuracy_pct
+
+
+def prediction_accuracy_pct(qsvm, scaled_features, priority):
+    if not hasattr(qsvm, "decision_function"):
+        return None
+
+    scores = np.asarray(qsvm.decision_function(scaled_features), dtype=float)
+    if scores.ndim == 1:
+        scores = scores.reshape(1, -1)
+
+    class_scores = scores[0]
+    shifted_scores = class_scores - np.max(class_scores)
+    exp_scores = np.exp(shifted_scores)
+    total = np.sum(exp_scores)
+
+    if not np.isfinite(total) or total == 0:
+        return None
+
+    class_labels = list(getattr(qsvm, "classes_", range(len(class_scores))))
+    try:
+        class_index = class_labels.index(priority)
+    except ValueError:
+        class_index = int(np.argmax(class_scores))
+
+    confidence = exp_scores[class_index] / total
+    return round(float(confidence * 100), 2)
 
 
 def draw_hazard_boxes(frame, hazard_detections):
@@ -770,7 +921,20 @@ def parse_args():
     parser.add_argument(
         "--output",
         default=OUTPUT_PATH,
-        help="Annotated output video path.",
+        help="Annotated output video path when --save-video is enabled.",
+    )
+    parser.add_argument(
+        "--save-video",
+        dest="save_video",
+        action="store_true",
+        default=True,
+        help="Save annotated output video (enabled by default).",
+    )
+    parser.add_argument(
+        "--no-save-video",
+        dest="save_video",
+        action="store_false",
+        help="Do not save the annotated output video.",
     )
     parser.add_argument(
         "--report-dir",
@@ -787,6 +951,15 @@ def parse_args():
         type=int,
         default=0,
         help="Stop after this many frames. Use 0 to process until the source ends.",
+    )
+    parser.add_argument(
+        "--stall-timeout",
+        type=float,
+        default=STREAM_STALL_TIMEOUT_SECONDS,
+        help=(
+            "Stop and save outputs when a live stream provides no new frame for "
+            "this many seconds."
+        ),
     )
     parser.add_argument(
         "--hazard-model",
@@ -809,14 +982,56 @@ def parse_args():
         action="store_true",
         help="Draw separate fire/smoke boxes for debugging.",
     )
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=DEFAULT_INFERENCE_SIZE,
+        help="YOLO inference image size. Lower values run faster (default: 320).",
+    )
+    parser.add_argument(
+        "--hazard-every",
+        type=int,
+        default=DEFAULT_HAZARD_INTERVAL,
+        help="Run the fire/smoke model every N frames (default: 5).",
+    )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="Inference device: auto, cpu, 0, 1, etc.",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
+    if args.imgsz <= 0:
+        raise ValueError("--imgsz must be greater than zero.")
+    if args.hazard_every <= 0:
+        raise ValueError("--hazard-every must be greater than zero.")
+
+    device = (
+        0
+        if args.device == "auto" and torch.cuda.is_available()
+        else "cpu"
+        if args.device == "auto"
+        else args.device
+    )
+    print(
+        "Inference device:",
+        torch.cuda.get_device_name(0) if device == 0 else device,
+    )
+    if device == "cpu":
+        print(
+            "CUDA is unavailable; using CPU fast mode "
+            f"(image size {args.imgsz}, hazard model every "
+            f"{args.hazard_every} frames)."
+        )
+
+    print("Loading person detection model:", MODEL_PATH)
     model = YOLO(MODEL_PATH)
     hazard_model_path = resolve_hazard_model_path(args.hazard_model)
+    print("Loading priority models...")
     hazard_model = YOLO(hazard_model_path) if hazard_model_path else None
     qsvm = joblib.load(PRIORITY_MODEL_PATH)
     scaler = joblib.load(PRIORITY_SCALER_PATH)
@@ -830,7 +1045,7 @@ def main():
     if args.enable_color_fallback:
         print("HSV color fallback enabled.")
 
-    cap = open_stream(args.source, args.mobile_ip)
+    cap = open_stream(args.source, args.mobile_ip, args.stall_timeout)
     gps_path = args.gps_path.strip("/")
     gps_url = f"http://{args.gps_host}:{args.gps_port}/{gps_path}"
 
@@ -845,114 +1060,161 @@ def main():
     print("Running YOLO + QSVM survivor priority detection. Press q to quit.")
     frame_count = 0
     total_survivor_hazards = 0
+    hazard_detections = []
 
-    while True:
-        ret, frame = cap.read()
+    try:
+        while True:
+            ret, frame = cap.read()
 
-        if not ret:
-            break
-
-        if out is None:
-            height, width = frame.shape[:2]
-            out = cv2.VideoWriter(
-                args.output,
-                cv2.VideoWriter_fourcc(*"mp4v"),
-                20,
-                (width, height),
-            )
-
-        now = time.time()
-        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        if not args.disable_gps and now - last_gps > GPS_INTERVAL_SECONDS:
-            last_lat, last_lon = get_gps(gps_url, last_lat, last_lon)
-            last_gps = now
-
-        gps_text = (
-            f"{last_lat},{last_lon}"
-            if last_lat is not None and last_lon is not None
-            else "unavailable"
-        )
-
-        results = model(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
-        hazard_results = (
-            hazard_model(frame, conf=args.hazard_conf, verbose=False)
-            if hazard_model
-            else None
-        )
-        hazard_detections = extract_hazard_detections(
-            hazard_results,
-            frame.shape,
-            args.hazard_conf,
-        )
-        if args.show_hazard_boxes:
-            draw_hazard_boxes(frame, hazard_detections)
-
-        for result in results:
-            for detected_box in result.boxes:
-                class_id = int(detected_box.cls[0])
-
-                if class_id != PERSON_CLASS_ID:
-                    continue
-
-                raw_box = tuple(map(int, detected_box.xyxy[0]))
-                box = clamp_box(raw_box, frame.shape[1], frame.shape[0])
-                center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-
-                movement_detected = detect_motion(frame_gray, previous_gray, box)
-                track_id, still_seconds = tracker.update(center, movement_detected, now)
-                features, hazard_name = extract_priority_features(
-                    frame,
-                    frame_gray,
-                    previous_gray,
-                    box,
-                    still_seconds,
-                    hazard_detections,
-                    args.enable_color_fallback,
-                )
-                features["movement_detected"] = movement_detected
-                total_survivor_hazards += int(features["nearby_hazards"])
-
-                priority = predict_priority(qsvm, scaler, features)
-                draw_label(frame, box, priority, track_id, features, hazard_name, gps_text)
-                report_writer.maybe_record(
-                    frame,
-                    box,
-                    track_id,
-                    priority,
-                    features,
-                    hazard_name,
-                    last_lat,
-                    last_lon,
-                    frame_count,
-                    now,
-                )
-
-        previous_gray = frame_gray
-        out.write(frame)
-
-        if not args.no_window:
-            cv2.imshow("YOLO + QSVM Survivor Priority", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            if not ret:
                 break
 
-        frame_count += 1
-        if args.max_frames and frame_count >= args.max_frames:
-            break
+            if args.save_video and out is None:
+                height, width = frame.shape[:2]
+                output_path = Path(args.output).expanduser().resolve()
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                out = cv2.VideoWriter(
+                    str(output_path),
+                    cv2.VideoWriter_fourcc(*"mp4v"),
+                    20,
+                    (width, height),
+                )
+                if not out.isOpened():
+                    out.release()
+                    out = None
+                    raise RuntimeError(
+                        "Unable to create output video at "
+                        f"{output_path}. Check the path and OpenCV codec support."
+                    )
+                print("Saving annotated video to:", output_path)
 
-    cap.release()
+            now = time.time()
+            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    if out:
-        out.release()
+            if not args.disable_gps and now - last_gps > GPS_INTERVAL_SECONDS:
+                last_lat, last_lon = get_gps(gps_url, last_lat, last_lon)
+                last_gps = now
 
-    cv2.destroyAllWindows()
-    report_outputs = report_writer.write_outputs()
-    print("Output saved:", args.output)
-    print("Frames processed:", frame_count)
-    print("Survivor labels with nearby hazard:", total_survivor_hazards)
-    print("Survivors recorded:", report_outputs["count"])
-    print("Survivor report saved:", report_outputs["report"])
-    print("Survivor map saved:", report_outputs["map"])
+            gps_text = (
+                f"{last_lat},{last_lon}"
+                if last_lat is not None and last_lon is not None
+                else "unavailable"
+            )
+
+            results = model.predict(
+                frame,
+                conf=CONFIDENCE_THRESHOLD,
+                classes=[PERSON_CLASS_ID],
+                imgsz=args.imgsz,
+                device=device,
+                half=device != "cpu",
+                verbose=False,
+            )
+            if hazard_model and frame_count % args.hazard_every == 0:
+                hazard_results = hazard_model.predict(
+                    frame,
+                    conf=args.hazard_conf,
+                    imgsz=args.imgsz,
+                    device=device,
+                    half=device != "cpu",
+                    verbose=False,
+                )
+                hazard_detections = extract_hazard_detections(
+                    hazard_results,
+                    frame.shape,
+                    args.hazard_conf,
+                )
+            if args.show_hazard_boxes:
+                draw_hazard_boxes(frame, hazard_detections)
+
+            for result in results:
+                for detected_box in result.boxes:
+                    class_id = int(detected_box.cls[0])
+
+                    if class_id != PERSON_CLASS_ID:
+                        continue
+
+                    raw_box = tuple(map(int, detected_box.xyxy[0]))
+                    box = clamp_box(raw_box, frame.shape[1], frame.shape[0])
+                    center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+
+                    movement_detected = detect_motion(frame_gray, previous_gray, box)
+                    track_id, still_seconds = tracker.update(
+                        center,
+                        movement_detected,
+                        now,
+                    )
+                    features, hazard_name = extract_priority_features(
+                        frame,
+                        frame_gray,
+                        previous_gray,
+                        box,
+                        still_seconds,
+                        hazard_detections,
+                        args.enable_color_fallback,
+                    )
+                    features["movement_detected"] = movement_detected
+                    total_survivor_hazards += int(features["nearby_hazards"])
+
+                    priority, prediction_accuracy = predict_priority(
+                        qsvm,
+                        scaler,
+                        features,
+                    )
+                    draw_label(
+                        frame,
+                        box,
+                        priority,
+                        track_id,
+                        features,
+                        hazard_name,
+                        gps_text,
+                    )
+                    report_writer.maybe_record(
+                        frame,
+                        box,
+                        track_id,
+                        priority,
+                        features,
+                        hazard_name,
+                        last_lat,
+                        last_lon,
+                        prediction_accuracy,
+                        frame_count,
+                        now,
+                    )
+
+            previous_gray = frame_gray
+            if out is not None:
+                out.write(frame)
+
+            if not args.no_window:
+                cv2.imshow("YOLO + QSVM Survivor Priority", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+
+            frame_count += 1
+            if args.max_frames and frame_count >= args.max_frames:
+                break
+    except KeyboardInterrupt:
+        print("\nStopping by user request. Saving outputs collected so far...")
+    finally:
+        cap.release()
+
+        if out is not None:
+            out.release()
+
+        cv2.destroyAllWindows()
+        report_outputs = report_writer.write_outputs()
+        if out is not None:
+            print("Output saved:", Path(args.output).expanduser().resolve())
+        else:
+            print("Output video disabled with --no-save-video.")
+        print("Frames processed:", frame_count)
+        print("Survivor labels with nearby hazard:", total_survivor_hazards)
+        print("Survivors recorded:", report_outputs["count"])
+        print("Survivor report saved:", report_outputs["report"])
+        print("Survivor map saved:", report_outputs["map"])
 
 
 if __name__ == "__main__":

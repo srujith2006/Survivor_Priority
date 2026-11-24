@@ -88,6 +88,12 @@ python survivor_detection.py --enable-color-fallback
 
 ## Commands
 
+Run these commands from the `Survivor_Priority` project directory. If your terminal is at the parent workspace directory, first run:
+
+```powershell
+cd .\Survivor_Priority
+```
+
 Generate survivor-priority dataset:
 
 ```powershell

@@ -15,13 +15,13 @@
 <body>
   <header>
     <strong>Survivor GPS Map</strong>
-    <div class="note">GPS markers are shown below.</div>
+    <div class="note">Showing Vasistha Enclave, Ramanayapeta, Kakinada for missing or out-of-area GPS.</div>
   </header>
   <div id="map"></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const points = [{"id": 1, "priority": "Low", "lat": 17.34, "lon": 82.78, "image": "images/survivor_1_frame_42.jpg", "hazard": "clear", "movement": "moving"}, {"id": 2, "priority": "Low", "lat": 17.34, "lon": 82.78, "image": "images/survivor_2_frame_44.jpg", "hazard": "clear", "movement": "moving"}];
-    const map = L.map('map').setView([17.34, 82.78], points.length ? 17 : 2);
+    const points = [{"id": 3, "priority": "High", "lat": 16.9978752, "lon": 82.2435257, "image": "images/survivor_3_frame_24.jpg", "hazard": "clear", "movement": "moving"}, {"id": 1, "priority": "Low", "lat": 16.9978752, "lon": 82.2435257, "image": "images/survivor_1_frame_21.jpg", "hazard": "clear", "movement": "moving"}, {"id": 2, "priority": "Low", "lat": 16.9978752, "lon": 82.2435257, "image": "images/survivor_2_frame_22.jpg", "hazard": "clear", "movement": "moving"}];
+    const map = L.map('map').setView([16.9978752, 82.2435257], points.length ? 17 : 2);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap contributors'

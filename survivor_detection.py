@@ -35,6 +35,11 @@ MOTION_PIXELS_THRESHOLD = 0.018
 TRACK_DISTANCE_THRESHOLD = 90
 STILL_TIME_CAP_SECONDS = 30
 GPS_CHANGE_THRESHOLD_METERS = 2.0
+# Temporary map fallback for Vasistha Enclave, Ramanayapeta, Kakinada.
+# Real GPS is used when it falls within 2 km of this location.
+MAP_FALLBACK_LATITUDE = 16.9978752
+MAP_FALLBACK_LONGITUDE = 82.2435257
+MAP_LOCATION_RADIUS_METERS = 2000
 STREAM_STALL_TIMEOUT_SECONDS = 5
 STREAM_OPEN_TIMEOUT_MILLISECONDS = 3000
 DEFAULT_INFERENCE_SIZE = 320
@@ -318,18 +323,33 @@ class SurvivorReportWriter:
         )
 
     def _write_map(self, events):
-        points = [
-            event
-            for event in events
-            if event["latitude"] is not None and event["longitude"] is not None
-        ]
+        points = []
+        used_fallback = False
+        for event in events:
+            latitude = event["latitude"]
+            longitude = event["longitude"]
+            if latitude is None or longitude is None:
+                latitude = MAP_FALLBACK_LATITUDE
+                longitude = MAP_FALLBACK_LONGITUDE
+                used_fallback = True
+            elif gps_distance_m(
+                MAP_FALLBACK_LATITUDE,
+                MAP_FALLBACK_LONGITUDE,
+                latitude,
+                longitude,
+            ) > MAP_LOCATION_RADIUS_METERS:
+                latitude = MAP_FALLBACK_LATITUDE
+                longitude = MAP_FALLBACK_LONGITUDE
+                used_fallback = True
+
+            points.append({**event, "map_latitude": latitude, "map_longitude": longitude})
         points_json = json.dumps(
             [
                 {
                     "id": event["survivor_id"],
                     "priority": event["priority_name"],
-                    "lat": event["latitude"],
-                    "lon": event["longitude"],
+                    "lat": event["map_latitude"],
+                    "lon": event["map_longitude"],
                     "image": relative_path(event["image_path"], self.report_dir),
                     "hazard": event["nearby_hazard"],
                     "movement": event["movement"],
@@ -337,12 +357,14 @@ class SurvivorReportWriter:
                 for event in points
             ]
         )
-        center_lat = points[0]["latitude"] if points else 0
-        center_lon = points[0]["longitude"] if points else 0
+        center_lat = points[0]["map_latitude"] if points else MAP_FALLBACK_LATITUDE
+        center_lon = points[0]["map_longitude"] if points else MAP_FALLBACK_LONGITUDE
         map_note = (
-            "GPS markers are shown below."
+            "Showing Vasistha Enclave, Ramanayapeta, Kakinada for missing or out-of-area GPS."
+            if used_fallback
+            else "GPS markers are shown below."
             if points
-            else "No GPS coordinates were available for this run."
+            else "No survivor markers for this run. Centered on Vasistha Enclave, Ramanayapeta, Kakinada."
         )
 
         map_html = f"""<!doctype html>

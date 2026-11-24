@@ -1,0 +1,13 @@
+# Runtime, data generation, and YOLO training dependencies
+opencv-python
+joblib
+numpy
+pandas
+requests
+torch
+ultralytics
+scikit-learn
+
+# QSVM training dependencies
+qiskit
+qiskit-machine-learning

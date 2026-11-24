@@ -1,3 +1,4 @@
 survivor_id,priority_name,qml_priority,prediction_accuracy_pct,latitude,longitude,gps_available,map_url,image_path,frame,captured_at,movement,nearby_hazard,distance_from_camera,body_visibility_pct,time_since_last_movement
-1,Low,Low,70.71,17.34,82.78,True,https://www.openstreetmap.org/?mlat=17.34&mlon=82.78#map=18/17.34/82.78,reports\images\survivor_1_frame_42.jpg,42,2026-06-29T19:24:56,moving,clear,0.042,0.7,0.0
-2,Low,Low,70.42,17.34,82.78,True,https://www.openstreetmap.org/?mlat=17.34&mlon=82.78#map=18/17.34/82.78,reports\images\survivor_2_frame_44.jpg,44,2026-06-29T19:25:00,moving,clear,0.025,0.7,0.0
+3,High,High,68.01,17.34,82.78,True,https://www.openstreetmap.org/?mlat=17.34&mlon=82.78#map=18/17.34/82.78,reports\images\survivor_3_frame_24.jpg,24,2026-11-24T21:20:22,moving,clear,0.162,0.268,0.0
+1,Low,Low,71.63,17.34,82.78,True,https://www.openstreetmap.org/?mlat=17.34&mlon=82.78#map=18/17.34/82.78,reports\images\survivor_1_frame_21.jpg,21,2026-11-24T21:20:19,moving,clear,0.5,0.389,0.0
+2,Low,Low,70.36,17.34,82.78,True,https://www.openstreetmap.org/?mlat=17.34&mlon=82.78#map=18/17.34/82.78,reports\images\survivor_2_frame_22.jpg,22,2026-11-24T21:20:20,moving,clear,0.021,0.7,0.0
